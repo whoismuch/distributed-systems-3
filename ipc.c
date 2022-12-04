@@ -96,7 +96,6 @@ int receive_all(void *self, local_id exceptPid) {
                 i--;
             }
             if (res == -2) {
-//                printf("ERROR\n");
                 return -1;
             }
         }
