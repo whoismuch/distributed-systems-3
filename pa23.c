@@ -5,11 +5,12 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include "banking.h"
 #include "ipc.h"
 #include <time.h>
 #include "pa2345.h"
 #include "common.h"
-#include "banking.c"
+#include "msg_handler.h"
 
 FILE *p_log;
 FILE *e_log;
@@ -45,36 +46,20 @@ int close_not_my_pipes(local_id pid) {
 void transfer(void *parent_data, local_id src, local_id dst,
               balance_t amount) {
 
-    inc_lamport_time();
-
     TransferOrder transferOrder = {
             .s_src = src,
             .s_dst = dst,
             .s_amount = amount
     };
 
-    MessageHeader message_header = {
-            .s_magic = MESSAGE_MAGIC,
-            .s_payload_len = sizeof(transferOrder),
-            .s_type = TRANSFER,
-            .s_local_time = get_lamport_time()
-    };
+    send(pipes_to_write[0], src, prepare_msg(&transferOrder, sizeof(transferOrder), TRANSFER));
 
-
-    Message message = {
-            .s_header = message_header,
-            .s_payload = {0} //не подсвечивается фиолетовым почему-то
-    };
-
-    memcpy(message.s_payload, &transferOrder, message.s_header.s_payload_len);
-
-    send(pipes_to_write[0], src, &message);
 
     while (1) {
         Message received_msg;
         memset(&received_msg, 0, sizeof(Message));
         if (receive(pipes_to_read[0], dst, &received_msg) == 0 && received_msg.s_header.s_type == ACK) {
-            inc_lamport_time();
+            handle_msg(&received_msg);
             break;
         }
     }
@@ -113,16 +98,14 @@ void initPipes() {
 }
 
 void sendStartMsg(local_id i) {
-    printf(log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
+    printf(log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
 
-    fprintf(e_log, log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
+    fprintf(e_log, log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
 
     char *message_content = (char *) malloc(255 * sizeof(char));
-    sprintf(message_content, log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
+    sprintf(message_content, log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
 
-    inc_lamport_time();
-
-    send_msgs(pipes_to_write[i], message_content, STARTED, get_lamport_time());
+    send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), STARTED));
 
     fprintf(p_log, "I wrote in all channels descriptor\n");
 
@@ -132,23 +115,21 @@ void receiveAllStartMsg(local_id i) {
 
     receive_all(pipes_to_read[i], 0);
 
-    printf(log_received_all_started_fmt, get_lamport_time(), i);
-    fprintf(e_log, log_received_all_started_fmt, get_lamport_time(), i);
+    printf(log_received_all_started_fmt, get_physical_time(), i);
+    fprintf(e_log, log_received_all_started_fmt, get_physical_time(), i);
 }
 
 void sendDoneMsg(local_id i, BalanceHistory *balanceHistory) {
-    printf(log_done_fmt, get_lamport_time(), i,
+    printf(log_done_fmt, get_physical_time(), i,
            balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
-    fprintf(e_log, log_done_fmt, get_lamport_time(), i,
+    fprintf(e_log, log_done_fmt, get_physical_time(), i,
             balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
 
     char *message_content = (char *) malloc(255 * sizeof(char));
-    sprintf(message_content, log_done_fmt, get_lamport_time(), i,
+    sprintf(message_content, log_done_fmt, get_physical_time(), i,
             balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
 
-        inc_lamport_time();
-
-    send_msgs(pipes_to_write[i], message_content, DONE, get_lamport_time());
+    send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), DONE));
 
     fprintf(p_log, "I wrote in all channels descriptors\n");
 //    printf("child %1d sent done in all channels descriptors\n", i);
@@ -157,30 +138,13 @@ void sendDoneMsg(local_id i, BalanceHistory *balanceHistory) {
 void receiveAllDoneMsg(local_id i) {
     receive_all(pipes_to_read[i], 0);
 
-    printf(log_received_all_done_fmt, get_lamport_time(), i);
-    fprintf(e_log, log_received_all_done_fmt, get_lamport_time(), i);
+    printf(log_received_all_done_fmt, get_physical_time(), i);
+    fprintf(e_log, log_received_all_done_fmt, get_physical_time(), i);
 //    printf("process %1d is here and it's okey\n", i);
 }
 
 void sendAckMsg(local_id from, local_id to) {
-
-    inc_lamport_time();
-
-    MessageHeader message_header = {
-            .s_magic = MESSAGE_MAGIC,
-            .s_payload_len = 0,
-            .s_type = ACK,
-            .s_local_time = get_lamport_time()
-    };
-
-
-    Message message = {
-            .s_header = message_header,
-            .s_payload = {0} //не подсвечивается фиолетовым почему-то
-    };
-
-    send(pipes_to_write[from], to, &message);
-
+    send(pipes_to_write[from], to, prepare_msg(NULL, 0, ACK));
 }
 
 void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
@@ -189,8 +153,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
         Message received_msg;
         memset(&received_msg, 0, sizeof(Message));
         while (receive_any(pipes_to_read[i], &received_msg) != 0);
-        inc_lamport_time();
-
+        handle_msg(&received_msg);
         if (received_msg.s_header.s_type == TRANSFER) {
             TransferOrder *transferOrder = (TransferOrder *) malloc(sizeof(TransferOrder));
             memcpy(transferOrder, received_msg.s_payload, received_msg.s_header.s_payload_len);// nb
@@ -204,7 +167,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len - 1];
                 BalanceState balanceState = {
                         .s_balance = previousBalSt.s_balance - transferOrder->s_amount,
-                        .s_time = get_lamport_time(),
+                        .s_time = get_physical_time(),
                         .s_balance_pending_in = 0
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
@@ -218,11 +181,10 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                 balanceHistory->s_history[balanceHistory->s_history_len - 1] = balanceState;
 
-                //переписать с исп lamport time в заголовке или нет?
                 send(pipes_to_write[i], transferOrder->s_dst, &received_msg);
 
-                printf(log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount, transferOrder->s_dst);
-                fprintf(e_log, log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount,
+                printf(log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount, transferOrder->s_dst);
+                fprintf(e_log, log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount,
                         transferOrder->s_dst);
 
 //                printf("child %1d CHANGED balance history, where s_id = %1d, s_hist_len = %d, s_history[0]bal = %d, s_history[1]bal = %d, s_history[2]bal = %d, s_history[3]bal = %d\n",
@@ -233,14 +195,14 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
             } else if (transferOrder->s_dst == i) {
 //                printf("child %1d is transferring in\n", i);
 
-                printf(log_transfer_in_fmt, get_lamport_time(), i, transferOrder->s_amount, transferOrder->s_src);
-                fprintf(e_log, log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount,
+                printf(log_transfer_in_fmt, get_physical_time(), i, transferOrder->s_amount, transferOrder->s_src);
+                fprintf(e_log, log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount,
                         transferOrder->s_src);
 
                 BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len - 1];
                 BalanceState balanceState = {
                         .s_balance = previousBalSt.s_balance + transferOrder->s_amount, //nb
-                        .s_time = get_lamport_time(),
+                        .s_time = get_physical_time(),
                         .s_balance_pending_in = 0
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
@@ -299,26 +261,8 @@ BalanceHistory *handleBalanceState(local_id i, timestamp_t time) {
 }
 
 void sendBalanceHistory(local_id i, BalanceHistory *balanceHistory) {
-    inc_lamport_time();
-
-    MessageHeader message_header = {
-            .s_magic = MESSAGE_MAGIC,
-            .s_payload_len = sizeof(balanceHistory->s_id) + sizeof(balanceHistory->s_history_len) +
-                             sizeof(BalanceState) * balanceHistory->s_history_len,
-            .s_type = BALANCE_HISTORY,
-            .s_local_time = get_lamport_time()
-    };
-
-    Message message = {
-            .s_header = message_header,
-            .s_payload = {0}
-    };
-
-    memcpy(message.s_payload, balanceHistory,
-           message_header.s_payload_len); //nb, unused part of array shouldn't be transfered
-
-
-    while (send(pipes_to_write[i], 0, &message) != 0);
+    send(pipes_to_write[i], 0, prepare_msg(balanceHistory,sizeof(balanceHistory->s_id) + sizeof(balanceHistory->s_history_len) +
+                                                          sizeof(BalanceState) * balanceHistory->s_history_len, BALANCE_HISTORY ));
 
 //    printf("child %1d sent balance history, where s_id = %1d, s_hist_len = %d, s_history[0]time = %d, s_history[1]time = %d, s_history[2]time = %d, s_history[3]time = %d\n",
 //           i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_time,
@@ -331,7 +275,7 @@ void initChildProcesses() {
     {
         pid_t child_pid = fork();
         if (child_pid == 0) {
-            timestamp_t time = get_lamport_time();
+            timestamp_t time = get_physical_time();
             BalanceHistory *history = handleBalanceState(i, time);
             close_not_my_pipes(i);
             sendStartMsg(i);
@@ -358,7 +302,7 @@ void sendStopMsg(local_id i) {
 
     char *message_content = ""; //nb
 
-    send_msgs(pipes_to_write[i], message_content, STOP, get_lamport_time());
+    send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), STOP));
 
     fprintf(p_log, "parent wrote STOP to all children\n");
 //    printf("parent wrote STOP to all children\n");
@@ -382,8 +326,7 @@ AllHistory *receiveAllBalHis(local_id i) {
                 memset(&message, 0, sizeof(Message));
                 if (receive(pipes_to_read[i], j, &message) == 0 &&
                     message.s_header.s_type == BALANCE_HISTORY) {
-                    inc_lamport_time();
-
+                    handle_msg(&message);
 //                    printf("Got from child %d his_len = %d, balance[0] = %d, time[0] = %d\n", j,
 //                           allHistory->s_history_len, allHistory->s_history[j].s_history[0].s_balance,
 //                           allHistory->s_history[j].s_history[0].s_time);
@@ -407,6 +350,7 @@ void parent_routine() {
     bank_robbery(NULL, process_number);
     sendStopMsg(0);
     receiveAllDoneMsg(0);
+//    printf("BLOP\n");
     AllHistory *allHistory = receiveAllBalHis(0);
     waitForChildrenTerminating();
     print_history(allHistory);

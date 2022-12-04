@@ -8,12 +8,11 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include "banking.c"
+#include "msg_handler.h"
 
 
 int send(void *self, local_id dst, const Message *msg) {
     if (msg == NULL) return -1;
-
     if (write(((int *) self)[dst], msg, sizeof(MessageHeader) + msg->s_header.s_payload_len) !=
         sizeof(MessageHeader) + msg->s_header.s_payload_len)
         return -1;
@@ -62,29 +61,6 @@ int receive_any(void *self, Message *msg) {
     return -1;
 }
 
-int send_msgs(void *self, const char *msg,
-              MessageType messageType) {
-
-    MessageHeader message_header = {
-            .s_magic = MESSAGE_MAGIC,
-            .s_payload_len = strlen(msg),
-            .s_type = messageType,
-            .s_local_time = get_lamport_time()
-    };
-
-
-    Message message = {
-            .s_header = message_header,
-            .s_payload = {0}
-    };
-
-    strcpy(message.s_payload, msg);
-
-    int res = send_multicast(self, &message);
-
-    return res;
-
-}
 
 int receive_all(void *self, local_id exceptPid) {
     local_id i = 0;
@@ -98,18 +74,18 @@ int receive_all(void *self, local_id exceptPid) {
                 i--;
             }
             else if (res == -2) {
+//                printf("ERROR\n");
                 return -1;
             }
             else {
-               inc_lamport_time()
+                handle_msg(&message);
             }
+
         }
         i++;
     }
     return 0;
 }
-
-
 
 
 
