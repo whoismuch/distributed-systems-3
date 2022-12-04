@@ -5,11 +5,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include "banking.h"
 #include "ipc.h"
 #include <time.h>
 #include "pa2345.h"
 #include "common.h"
+#include "banking.c"
 
 FILE *p_log;
 FILE *e_log;
@@ -45,6 +45,8 @@ int close_not_my_pipes(local_id pid) {
 void transfer(void *parent_data, local_id src, local_id dst,
               balance_t amount) {
 
+    inc_lamport_time();
+
     TransferOrder transferOrder = {
             .s_src = src,
             .s_dst = dst,
@@ -68,11 +70,11 @@ void transfer(void *parent_data, local_id src, local_id dst,
 
     send(pipes_to_write[0], src, &message);
 
-
     while (1) {
         Message received_msg;
         memset(&received_msg, 0, sizeof(Message));
         if (receive(pipes_to_read[0], dst, &received_msg) == 0 && received_msg.s_header.s_type == ACK) {
+            inc_lamport_time();
             break;
         }
     }
@@ -118,6 +120,7 @@ void sendStartMsg(local_id i) {
     char *message_content = (char *) malloc(255 * sizeof(char));
     sprintf(message_content, log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
 
+    inc_lamport_time();
 
     send_msgs(pipes_to_write[i], message_content, STARTED, get_lamport_time());
 
@@ -143,6 +146,8 @@ void sendDoneMsg(local_id i, BalanceHistory *balanceHistory) {
     sprintf(message_content, log_done_fmt, get_lamport_time(), i,
             balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
 
+        inc_lamport_time();
+
     send_msgs(pipes_to_write[i], message_content, DONE, get_lamport_time());
 
     fprintf(p_log, "I wrote in all channels descriptors\n");
@@ -158,6 +163,8 @@ void receiveAllDoneMsg(local_id i) {
 }
 
 void sendAckMsg(local_id from, local_id to) {
+
+    inc_lamport_time();
 
     MessageHeader message_header = {
             .s_magic = MESSAGE_MAGIC,
@@ -182,6 +189,8 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
         Message received_msg;
         memset(&received_msg, 0, sizeof(Message));
         while (receive_any(pipes_to_read[i], &received_msg) != 0);
+        inc_lamport_time();
+
         if (received_msg.s_header.s_type == TRANSFER) {
             TransferOrder *transferOrder = (TransferOrder *) malloc(sizeof(TransferOrder));
             memcpy(transferOrder, received_msg.s_payload, received_msg.s_header.s_payload_len);// nb
@@ -200,7 +209,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
 
-                for (timestamp_t time=lastTime+1; time < balanceState.s_time; time++) {
+                for (timestamp_t time = lastTime + 1; time < balanceState.s_time; time++) {
                     balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                     BalanceState balanceStateMiddle = previousBalSt;
                     balanceStateMiddle.s_time = time;
@@ -209,6 +218,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                 balanceHistory->s_history[balanceHistory->s_history_len - 1] = balanceState;
 
+                //переписать с исп lamport time в заголовке или нет?
                 send(pipes_to_write[i], transferOrder->s_dst, &received_msg);
 
                 printf(log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount, transferOrder->s_dst);
@@ -235,7 +245,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
 
-                for (timestamp_t time=lastTime+1; time < balanceState.s_time; time++) {
+                for (timestamp_t time = lastTime + 1; time < balanceState.s_time; time++) {
                     balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                     BalanceState balanceStateMiddle = previousBalSt;
                     balanceStateMiddle.s_time = time;
@@ -254,8 +264,8 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
         }
         if (received_msg.s_header.s_type == STOP) {
             timestamp_t endOfTime = received_msg.s_header.s_local_time;
-            BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len-1];
-            for (timestamp_t time=previousBalSt.s_time+1; time <= endOfTime; time++) {
+            BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len - 1];
+            for (timestamp_t time = previousBalSt.s_time + 1; time <= endOfTime; time++) {
                 balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                 BalanceState balanceStateMiddle = previousBalSt;
                 balanceStateMiddle.s_time = time;
@@ -289,6 +299,8 @@ BalanceHistory *handleBalanceState(local_id i, timestamp_t time) {
 }
 
 void sendBalanceHistory(local_id i, BalanceHistory *balanceHistory) {
+    inc_lamport_time();
+
     MessageHeader message_header = {
             .s_magic = MESSAGE_MAGIC,
             .s_payload_len = sizeof(balanceHistory->s_id) + sizeof(balanceHistory->s_history_len) +
@@ -370,6 +382,8 @@ AllHistory *receiveAllBalHis(local_id i) {
                 memset(&message, 0, sizeof(Message));
                 if (receive(pipes_to_read[i], j, &message) == 0 &&
                     message.s_header.s_type == BALANCE_HISTORY) {
+                    inc_lamport_time();
+
 //                    printf("Got from child %d his_len = %d, balance[0] = %d, time[0] = %d\n", j,
 //                           allHistory->s_history_len, allHistory->s_history[j].s_history[0].s_balance,
 //                           allHistory->s_history[j].s_history[0].s_time);
@@ -393,7 +407,6 @@ void parent_routine() {
     bank_robbery(NULL, process_number);
     sendStopMsg(0);
     receiveAllDoneMsg(0);
-//    printf("BLOP\n");
     AllHistory *allHistory = receiveAllBalHis(0);
     waitForChildrenTerminating();
     print_history(allHistory);
