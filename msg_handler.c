@@ -37,4 +37,5 @@ void handle_msg(Message *msg) {
     timestamp_t curr_time = get_lamport_time();
     if (msg->s_header.s_local_time > curr_time) set_lamport_time(msg->s_header.s_local_time);
     inc_lamport_time();
+    inc_lamport_time();
 }
