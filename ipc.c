@@ -8,7 +8,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include "msg_handler.h"
 
 
 int send(void *self, local_id dst, const Message *msg) {
@@ -61,31 +60,6 @@ int receive_any(void *self, Message *msg) {
     return -1;
 }
 
-
-int receive_all(void *self, local_id exceptPid) {
-    local_id i = 0;
-    int res;
-    Message message;
-    memset(&message, 0, sizeof(Message));
-    while (((int *) self)[i] != -1) {
-        if (((int *) self)[i] != -999 && i != exceptPid) {
-            res = receive(self, i, &message);
-            if (res == 1) {
-                i--;
-            }
-            else if (res == -2) {
-//                printf("ERROR\n");
-                return -1;
-            }
-            else {
-                handle_msg(&message);
-            }
-
-        }
-        i++;
-    }
-    return 0;
-}
 
 
 

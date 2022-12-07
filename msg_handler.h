@@ -1,6 +1,7 @@
 //
 // Created by Хумай Байрамова on 04.12.2022.
 //
+#include "ipc.h"
 #include "banking.h"
 #include <unistd.h>
 
@@ -10,5 +11,7 @@
 Message* prepare_msg(void *payload, uint16_t payload_len, int16_t type);
 
 void handle_msg(Message* msg);
+
+Message *remessage(Message* msg);
 
 #endif //DISTRIBUTED_SYSTEMS_2_MSG_HANDLER_H

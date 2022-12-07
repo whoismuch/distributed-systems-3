@@ -5,8 +5,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include "banking.h"
-#include "ipc.h"
+//#include "ipc.h"
 #include <time.h>
 #include "pa2345.h"
 #include "common.h"
@@ -19,11 +18,9 @@ int pipes_to_read[12][12];
 int pipes_to_write[12][12];
 int balances[10];
 
-int send_msgs(void *self, const char *msg,
-              MessageType messageType, timestamp_t time);
+Message* prepare_msg(void *payload, uint16_t payload_len, int16_t type);
 
-int receive_all(void *self, local_id exceptPid);
-
+void handle_msg(Message* msg);
 
 int close_not_my_pipes(local_id pid) {
     for (int i = 0; i <= process_number; i++) {
@@ -64,7 +61,7 @@ void transfer(void *parent_data, local_id src, local_id dst,
         }
     }
 
-//    printf("parent received ACK\n");
+    printf("parent received ACK\n");
 
 }
 
@@ -98,12 +95,12 @@ void initPipes() {
 }
 
 void sendStartMsg(local_id i) {
-    printf(log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
+    printf(log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
 
-    fprintf(e_log, log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
+    fprintf(e_log, log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
 
     char *message_content = (char *) malloc(255 * sizeof(char));
-    sprintf(message_content, log_started_fmt, get_physical_time(), i, getpid(), getppid(), balances[i]);
+    sprintf(message_content, log_started_fmt, get_lamport_time(), i, getpid(), getppid(), balances[i]);
 
     send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), STARTED));
 
@@ -113,34 +110,74 @@ void sendStartMsg(local_id i) {
 
 void receiveAllStartMsg(local_id i) {
 
-    receive_all(pipes_to_read[i], 0);
+    local_id j = 0;
+    int res;
+    Message message;
+    memset(&message, 0, sizeof(Message));
+    while (pipes_to_read[i][j] != -1) {
+        if (pipes_to_read[i][j]  != -999 && j != 0) {
+            res = receive(pipes_to_read[i] , j, &message);
+            if (res == 1) {
+                j--;
+            }
+            else if (res == -2) {
+//                printf("ERROR\n");
+//                return -1;
+            }
+            else {
+                handle_msg(&message);
+            }
 
-    printf(log_received_all_started_fmt, get_physical_time(), i);
-    fprintf(e_log, log_received_all_started_fmt, get_physical_time(), i);
+        }
+        j++;
+    }
+
+    printf(log_received_all_started_fmt, get_lamport_time(), i);
+    fprintf(e_log, log_received_all_started_fmt, get_lamport_time(), i);
 }
 
 void sendDoneMsg(local_id i, BalanceHistory *balanceHistory) {
-    printf(log_done_fmt, get_physical_time(), i,
+    printf(log_done_fmt, get_lamport_time(), i,
            balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
-    fprintf(e_log, log_done_fmt, get_physical_time(), i,
+    fprintf(e_log, log_done_fmt, get_lamport_time(), i,
             balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
 
     char *message_content = (char *) malloc(255 * sizeof(char));
-    sprintf(message_content, log_done_fmt, get_physical_time(), i,
+    sprintf(message_content, log_done_fmt, get_lamport_time(), i,
             balanceHistory->s_history[balanceHistory->s_history_len - 1].s_balance);
 
     send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), DONE));
 
     fprintf(p_log, "I wrote in all channels descriptors\n");
-//    printf("child %1d sent done in all channels descriptors\n", i);
+    printf("child %1d sent done in all channels descriptors\n", i);
 }
 
 void receiveAllDoneMsg(local_id i) {
-    receive_all(pipes_to_read[i], 0);
+    local_id j = 0;
+    int res;
+    Message message;
+    memset(&message, 0, sizeof(Message));
+    while (pipes_to_read[i][j] != -1) {
+        if (pipes_to_read[i][j]  != -999 && j != 0) {
+            res = receive(pipes_to_read[i] , j, &message);
+            if (res == 1) {
+                j--;
+            }
+            else if (res == -2) {
+//                printf("ERROR\n");
+//                return -1;
+            }
+            else {
+                handle_msg(&message);
+            }
 
-    printf(log_received_all_done_fmt, get_physical_time(), i);
-    fprintf(e_log, log_received_all_done_fmt, get_physical_time(), i);
-//    printf("process %1d is here and it's okey\n", i);
+        }
+        j++;
+    }
+
+    printf(log_received_all_done_fmt, get_lamport_time(), i);
+    fprintf(e_log, log_received_all_done_fmt, get_lamport_time(), i);
+    printf("process %1d is here and it's okey\n", i);
 }
 
 void sendAckMsg(local_id from, local_id to) {
@@ -157,18 +194,18 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
         if (received_msg.s_header.s_type == TRANSFER) {
             TransferOrder *transferOrder = (TransferOrder *) malloc(sizeof(TransferOrder));
             memcpy(transferOrder, received_msg.s_payload, received_msg.s_header.s_payload_len);// nb
-//            printf("child %1d transfer info: src -  %1d, dst - %1d, amount - $%d, payload_len - %d is transferring\n",
-//                   i, transferOrder->s_src, transferOrder->s_dst, transferOrder->s_amount,
-//                   received_msg.s_header.s_payload_len);
+            printf("child %1d transfer info: src -  %1d, dst - %1d, amount - $%d, payload_len - %d is transferring\n",
+                   i, transferOrder->s_src, transferOrder->s_dst, transferOrder->s_amount,
+                   received_msg.s_header.s_payload_len);
 
 
             if (transferOrder->s_src == i) {
-//                printf("child %1d is transferring out\n", i);
+                printf("child %1d is transferring out\n", i);
                 BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len - 1];
                 BalanceState balanceState = {
                         .s_balance = previousBalSt.s_balance - transferOrder->s_amount,
-                        .s_time = get_physical_time(),
-                        .s_balance_pending_in = 0
+                        .s_time = get_lamport_time(),
+                        .s_balance_pending_in = previousBalSt.s_balance_pending_in + transferOrder->s_amount
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
 
@@ -181,28 +218,28 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                 balanceHistory->s_history[balanceHistory->s_history_len - 1] = balanceState;
 
-                send(pipes_to_write[i], transferOrder->s_dst, &received_msg);
+                send(pipes_to_write[i], transferOrder->s_dst, remessage(&received_msg));
 
-                printf(log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount, transferOrder->s_dst);
-                fprintf(e_log, log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount,
+                printf(log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount, transferOrder->s_dst);
+                fprintf(e_log, log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount,
                         transferOrder->s_dst);
 
-//                printf("child %1d CHANGED balance history, where s_id = %1d, s_hist_len = %d, s_history[0]bal = %d, s_history[1]bal = %d, s_history[2]bal = %d, s_history[3]bal = %d\n",
-//                       i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_balance,
-//                       balanceHistory->s_history[1].s_balance, balanceHistory->s_history[2].s_balance,
-//                       balanceHistory->s_history[3].s_balance);
+                printf("child %1d CHANGED balance history, where s_id = %1d, s_hist_len = %d, s_history[0]bal = %d, s_history[1]bal = %d, s_history[2]bal = %d, s_history[3]bal = %d\n",
+                       i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_balance,
+                       balanceHistory->s_history[1].s_balance, balanceHistory->s_history[2].s_balance,
+                       balanceHistory->s_history[3].s_balance);
 
             } else if (transferOrder->s_dst == i) {
-//                printf("child %1d is transferring in\n", i);
+                printf("child %1d is transferring in\n", i);
 
-                printf(log_transfer_in_fmt, get_physical_time(), i, transferOrder->s_amount, transferOrder->s_src);
-                fprintf(e_log, log_transfer_out_fmt, get_physical_time(), i, transferOrder->s_amount,
+                printf(log_transfer_in_fmt, get_lamport_time(), i, transferOrder->s_amount, transferOrder->s_src);
+                fprintf(e_log, log_transfer_out_fmt, get_lamport_time(), i, transferOrder->s_amount,
                         transferOrder->s_src);
 
                 BalanceState previousBalSt = balanceHistory->s_history[balanceHistory->s_history_len - 1];
                 BalanceState balanceState = {
                         .s_balance = previousBalSt.s_balance + transferOrder->s_amount, //nb
-                        .s_time = get_physical_time(),
+                        .s_time = get_lamport_time(),
                         .s_balance_pending_in = 0
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
@@ -216,10 +253,10 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 balanceHistory->s_history_len = balanceHistory->s_history_len + 1;
                 balanceHistory->s_history[balanceHistory->s_history_len - 1] = balanceState;
 
-//                printf("child %1d CHANGED balance history, where s_id = %1d, s_hist_len = %d, s_history[0]bal = %d, s_history[1]bal = %d, s_history[2]bal = %d, s_history[3]bal = %d\n",
-//                       i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_balance,
-//                       balanceHistory->s_history[1].s_balance, balanceHistory->s_history[2].s_balance,
-//                       balanceHistory->s_history[3].s_balance);
+                printf("child %1d CHANGED balance history, where s_id = %1d, s_hist_len = %d, s_history[0]bal = %d, s_history[1]bal = %d, s_history[2]bal = %d, s_history[3]bal = %d\n",
+                       i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_balance,
+                       balanceHistory->s_history[1].s_balance, balanceHistory->s_history[2].s_balance,
+                       balanceHistory->s_history[3].s_balance);
 
                 sendAckMsg(i, 0);
             }
@@ -254,8 +291,8 @@ BalanceHistory *handleBalanceState(local_id i, timestamp_t time) {
     balanceHistory->s_history_len = 1;
     memcpy(&(balanceHistory->s_history[0]), balanceState, sizeof(BalanceState) * balanceHistory->s_history_len);
 
-//    printf("child %1d has real_s_time = %d, s_time = %d, s_bal = %d\n", i, balanceState->s_time,
-//           balanceHistory->s_history[0].s_time, balanceHistory->s_history[0].s_balance);
+    printf("child %1d has real_s_time = %d, s_time = %d, s_bal = %d\n", i, balanceState->s_time,
+           balanceHistory->s_history[0].s_time, balanceHistory->s_history[0].s_balance);
 
     return balanceHistory;
 }
@@ -264,10 +301,10 @@ void sendBalanceHistory(local_id i, BalanceHistory *balanceHistory) {
     send(pipes_to_write[i], 0, prepare_msg(balanceHistory,sizeof(balanceHistory->s_id) + sizeof(balanceHistory->s_history_len) +
                                                           sizeof(BalanceState) * balanceHistory->s_history_len, BALANCE_HISTORY ));
 
-//    printf("child %1d sent balance history, where s_id = %1d, s_hist_len = %d, s_history[0]time = %d, s_history[1]time = %d, s_history[2]time = %d, s_history[3]time = %d\n",
-//           i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_time,
-//           balanceHistory->s_history[1].s_time, balanceHistory->s_history[2].s_time,
-//           balanceHistory->s_history[3].s_time);
+    printf("child %1d sent balance history, where s_id = %1d, s_hist_len = %d, s_history[0]time = %d, s_history[1]time = %d, s_history[2]time = %d, s_history[3]time = %d\n",
+           i, balanceHistory->s_id, balanceHistory->s_history_len, balanceHistory->s_history[0].s_time,
+           balanceHistory->s_history[1].s_time, balanceHistory->s_history[2].s_time,
+           balanceHistory->s_history[3].s_time);
 }
 
 void initChildProcesses() {
@@ -275,7 +312,7 @@ void initChildProcesses() {
     {
         pid_t child_pid = fork();
         if (child_pid == 0) {
-            timestamp_t time = get_physical_time();
+            timestamp_t time = get_lamport_time();
             BalanceHistory *history = handleBalanceState(i, time);
             close_not_my_pipes(i);
             sendStartMsg(i);
@@ -298,20 +335,20 @@ void waitForChildrenTerminating() {
 
 void sendStopMsg(local_id i) {
     fprintf(p_log, "parent is sending STOP to all children\n");
-//    printf("parent is sending STOP to all children\n");
+    printf("parent is sending STOP to all children\n");
 
     char *message_content = ""; //nb
 
     send_multicast(pipes_to_write[i], prepare_msg(message_content, strlen(message_content), STOP));
 
     fprintf(p_log, "parent wrote STOP to all children\n");
-//    printf("parent wrote STOP to all children\n");
+    printf("parent wrote STOP to all children\n");
 
 }
 
 AllHistory *receiveAllBalHis(local_id i) {
     fprintf(p_log, "parent start receiving all balance history messages\n");
-//    printf("parent start receiving all balance history messages\n");
+    printf("parent start receiving all balance history messages\n");
 
 
     AllHistory *allHistory = malloc(sizeof(allHistory->s_history_len) + sizeof(BalanceHistory) * (process_number + 1));
@@ -327,9 +364,9 @@ AllHistory *receiveAllBalHis(local_id i) {
                 if (receive(pipes_to_read[i], j, &message) == 0 &&
                     message.s_header.s_type == BALANCE_HISTORY) {
                     handle_msg(&message);
-//                    printf("Got from child %d his_len = %d, balance[0] = %d, time[0] = %d\n", j,
-//                           allHistory->s_history_len, allHistory->s_history[j].s_history[0].s_balance,
-//                           allHistory->s_history[j].s_history[0].s_time);
+                    printf("Got from child %d his_len = %d, balance[0] = %d, time[0] = %d\n", j,
+                           allHistory->s_history_len, allHistory->s_history[j].s_history[0].s_balance,
+                           allHistory->s_history[j].s_history[0].s_time);
                     memcpy(&(allHistory->s_history[j - 1]), message.s_payload,
                            message.s_header.s_payload_len); // !!! nb  (sizeof мб неверный)
                     break;
@@ -337,7 +374,7 @@ AllHistory *receiveAllBalHis(local_id i) {
             }
         }
     }
-//    printf("I received all balance history messages\n");
+    printf("I received all balance history messages\n");
     fprintf(p_log, "I received all balance history messages\n");
 
     return allHistory;
