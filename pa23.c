@@ -240,7 +240,7 @@ void processTransferringByChild(local_id i, BalanceHistory *balanceHistory) {
                 BalanceState balanceState = {
                         .s_balance = previousBalSt.s_balance + transferOrder->s_amount, //nb
                         .s_time = get_lamport_time(),
-                        .s_balance_pending_in = 0
+                        .s_balance_pending_in = previousBalSt.s_balance_pending_in - transferOrder->s_amount
                 };
                 timestamp_t lastTime = previousBalSt.s_time;
 
