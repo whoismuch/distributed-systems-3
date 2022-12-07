@@ -29,6 +29,7 @@ Message *prepare_msg(void *payload, uint16_t payload_len, int16_t type) {
 }
 
 Message *remessage(Message* msg) {
+    inc_lamport_time();
     msg->s_header.s_local_time = get_lamport_time();
     return msg;
 }
@@ -36,6 +37,5 @@ Message *remessage(Message* msg) {
 void handle_msg(Message *msg) {
     timestamp_t curr_time = get_lamport_time();
     if (msg->s_header.s_local_time > curr_time) set_lamport_time(msg->s_header.s_local_time);
-    inc_lamport_time();
     inc_lamport_time();
 }
